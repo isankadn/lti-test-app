@@ -60,6 +60,9 @@ To integrate into your existing platform:
 - [IMS LTI 1.3 Specification](https://www.imsglobal.org/spec/lti/v1p3/)
 - [Saltire Testing Tool](https://saltire.lti.app/)
 
+## Saltire configurations
+![Saltire configurations](image-2.png)
+
 ---
 
 **Note**: This is a demo implementation. For production use, consider using established libraries like [LTI-PHP](https://github.com/celtic-project/LTI-PHP).

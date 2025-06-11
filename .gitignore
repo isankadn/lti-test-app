@@ -99,3 +99,6 @@ phpunit.xml
 .phpunit.result.cache
 tests/_output/
 coverage/
+
+./example/
+example/

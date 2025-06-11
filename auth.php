@@ -1,7 +1,7 @@
 <?php
 /**
  * LTI 1.3 Authentication Endpoint
- * This receives the authentication request from Saltire and responds with a JWT
+ * This receives the authentication request from Moodle and responds with a JWT
  */
 session_start();
 
@@ -10,7 +10,7 @@ require_once __DIR__ . '/config.php';
 
 /**
  * LTI 1.3 Platform Authentication Endpoint
- * This endpoint receives authentication requests from Saltire tool
+ * This endpoint receives authentication requests from Moodle tool
  * and responds with a JWT ID token containing the LTI launch claims
  */
 
@@ -75,7 +75,7 @@ logMessage("=== Authentication endpoint called ===", array_merge($_REQUEST, [
     'session_contents' => array_keys($_SESSION)
 ]), 'AUTH');
 
-// Handle both GET and POST requests (Saltire can use either)
+// Handle both GET and POST requests (Moodle can use either)
 if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST') {
     $params = $_REQUEST;  // This handles both GET and POST parameters
 
@@ -91,8 +91,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
     }
 
     // Validate client_id
-    if ($params['client_id'] !== SALTIRE_CLIENT_ID) {
-        logMessage("Invalid client_id", ['received' => $params['client_id'], 'expected' => SALTIRE_CLIENT_ID], 'AUTH');
+    if ($params['client_id'] !== MOODLE_CLIENT_ID) {
+        logMessage("Invalid client_id", ['received' => $params['client_id'], 'expected' => MOODLE_CLIENT_ID], 'AUTH');
         http_response_code(400);
         echo "Bad Request: Invalid client_id";
         exit;
@@ -112,11 +112,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         // In production, you'd look up the real user from your database
         $user = [
             'user_id' => $params['login_hint'],
-            'name' => 'Demo User',
-            'given_name' => 'Demo',
-            'family_name' => 'User',
-            'email' => 'demo.user@example.edu',
-            'role' => 'learner',
+            'name' => DEMO_USER_NAME,
+            'given_name' => DEMO_USER_GIVEN_NAME,
+            'family_name' => DEMO_USER_FAMILY_NAME,
+            'email' => DEMO_USER_EMAIL,
+            'role' => DEMO_USER_ROLE,
             'roles' => ['http://purl.imsglobal.org/vocab/lis/v2/membership#Learner']
         ];
 
@@ -128,8 +128,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         'user' => $user,
         'client_id' => $params['client_id'],
         'redirect_uri' => $params['redirect_uri'],
-        'saltire_state' => $params['state'],
-        'saltire_nonce' => $params['nonce']
+        'moodle_state' => $params['state'],
+        'moodle_nonce' => $params['nonce']
     ], 'AUTH');
 
     try {
@@ -137,7 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         $header = [
             'typ' => 'JWT',
             'alg' => 'RS256',
-            'kid' => 'demo-key-1'
+            'kid' => JWT_KEY_ID
         ];
 
         // Create JWT payload with LTI 1.3 claims
@@ -147,9 +147,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
             'iss' => PLATFORM_ISSUER,
             'aud' => $params['client_id'],
             'sub' => $user['user_id'],
-            'exp' => $now + 3600, // 1 hour
+            'exp' => $now + (JWT_EXPIRY_HOURS * 3600), // Configurable expiry
             'iat' => $now,
-            'nonce' => $params['nonce'], // Use the nonce from Saltire's request
+            'nonce' => $params['nonce'], // Use the nonce from Moodle's request
 
             // LTI specific claims
             'https://purl.imsglobal.org/spec/lti/claim/message_type' => 'LtiResourceLinkRequest',
@@ -167,32 +167,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
             // Resource link
             'https://purl.imsglobal.org/spec/lti/claim/resource_link' => [
                 'id' => 'resource-' . bin2hex(random_bytes(8)),
-                'title' => 'Sample Learning Resource',
-                'description' => 'A sample learning resource launched from our PHP LTI Platform'
+                'title' => LTI_RESOURCE_TITLE,
+                'description' => LTI_RESOURCE_DESCRIPTION
             ],
 
             // Context (course)
             'https://purl.imsglobal.org/spec/lti/claim/context' => [
                 'id' => 'course-' . bin2hex(random_bytes(8)),
-                'label' => 'CS101',
-                'title' => 'Introduction to Computer Science',
+                'label' => LTI_CONTEXT_LABEL,
+                'title' => LTI_CONTEXT_TITLE,
                 'type' => ['http://purl.imsglobal.org/vocab/lis/v2/course#CourseOffering']
             ],
 
             // Platform instance
             'https://purl.imsglobal.org/spec/lti/claim/tool_platform' => [
                 'guid' => PLATFORM_DOMAIN,
-                'name' => 'PHP LTI Platform',
-                'version' => '1.0',
-                'product_family_code' => 'php-lti-platform'
+                'name' => PLATFORM_NAME,
+                'version' => PLATFORM_VERSION,
+                'product_family_code' => PLATFORM_PRODUCT_FAMILY
             ],
 
             // Launch presentation
             'https://purl.imsglobal.org/spec/lti/claim/launch_presentation' => [
-                'document_target' => 'iframe',
-                'height' => 800,
-                'width' => 1200,
+                'document_target' => LAUNCH_DOCUMENT_TARGET,
+                'height' => LAUNCH_HEIGHT,
+                'width' => LAUNCH_WIDTH,
                 'return_url' => PLATFORM_RETURN_URL
+            ],
+
+            // Custom claims for Moodle LTI Advantage
+            'https://purl.imsglobal.org/spec/lti/claim/custom' => [
+                'id' => MOODLE_PUBLISHED_TOOL_ID
             ],
 
             // LTI message hint (if provided)
@@ -222,12 +227,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
             ]
         ], 'AUTH');
 
-        // Respond with form post to Saltire
+        // Respond with form post to Moodle
         ?>
         <!DOCTYPE html>
         <html>
         <head>
-            <title>LTI 1.3 Launch - Redirecting to Saltire Tool</title>
+            <title>LTI 1.3 Launch - Redirecting to Moodle</title>
             <style>
                 body {
                     font-family: Arial, sans-serif;
@@ -264,16 +269,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         </head>
         <body>
             <div class="container">
-                <h2>🚀 Launching Learning Tool</h2>
+                <h2>🚀 Launching Moodle Course</h2>
                 <div class="spinner"></div>
-                <p>Redirecting to Saltire Learning Tool...</p>
+                <p>Redirecting to Moodle LMS...</p>
                 <p><small>If you are not redirected automatically, please click the button below.</small></p>
 
                 <form id="launchForm" method="POST" action="<?php echo htmlspecialchars($params['redirect_uri']); ?>">
                     <input type="hidden" name="id_token" value="<?php echo htmlspecialchars($idToken); ?>">
                     <input type="hidden" name="state" value="<?php echo htmlspecialchars($params['state']); ?>">
                     <button type="submit" style="background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; margin-top: 20px;">
-                        Continue to Tool
+                        Continue to Moodle
                     </button>
                 </form>
             </div>

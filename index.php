@@ -4,8 +4,8 @@ session_start();
 // Load central configuration
 require_once __DIR__ . '/config.php';
 
-// Handle form submission for launching to Saltire
-if ($_POST && isset($_POST['launch_to_saltire'])) {
+// Handle form submission for launching to Moodle
+if ($_POST && isset($_POST['launch_to_moodle'])) {
     // Generate random user (simulating logged-in user)
     $user = generateRandomUser();
 
@@ -25,7 +25,7 @@ if ($_POST && isset($_POST['launch_to_saltire'])) {
     session_write_close();
     session_start();
 
-    logMessage("Initiating LTI 1.3 launch to Saltire", [
+    logMessage("Initiating LTI 1.3 launch to Moodle", [
         'user' => $user,
         'state' => $state,
         'nonce' => $nonce,
@@ -40,17 +40,19 @@ if ($_POST && isset($_POST['launch_to_saltire'])) {
     $oidcParams = [
         'iss' => PLATFORM_ISSUER,
         'login_hint' => $user['user_id'],
-        'target_link_uri' => SALTIRE_LAUNCH_URL,
-        'client_id' => SALTIRE_CLIENT_ID,
+        'target_link_uri' => MOODLE_LAUNCH_URL,
+        'client_id' => MOODLE_CLIENT_ID,
         'lti_deployment_id' => DEFAULT_DEPLOYMENT_ID,
         'lti_message_hint' => $_SESSION['lti_message_hint']
     ];
 
-    $oidcUrl = SALTIRE_OIDC_LOGIN_URL . '?' . http_build_query($oidcParams);
+    // Check if MOODLE_OIDC_LOGIN_URL already has parameters
+    $separator = (strpos(MOODLE_OIDC_LOGIN_URL, '?') !== false) ? '&' : '?';
+    $oidcUrl = MOODLE_OIDC_LOGIN_URL . $separator . http_build_query($oidcParams);
 
-    logMessage("Redirecting to Saltire OIDC login", ['url' => $oidcUrl], 'LAUNCH_INIT');
+    logMessage("Redirecting to Moodle OIDC login", ['url' => $oidcUrl], 'LAUNCH_INIT');
 
-    // Redirect to Saltire's OIDC login endpoint
+    // Redirect to Moodle's OIDC login endpoint
     header("Location: $oidcUrl");
     exit;
 }
@@ -60,7 +62,7 @@ if ($_POST && isset($_POST['launch_to_saltire'])) {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LTI 1.3 Platform - Launch to Application B</title>
+    <title>LTI 1.3 Platform - Launch to Moodle</title>
     <style>
         * {
             margin: 0;
@@ -220,16 +222,16 @@ if ($_POST && isset($_POST['launch_to_saltire'])) {
     <div class="container">
         <div class="header">
             <h1>🚀 LTI 1.3 Platform</h1>
-            <p>Welcome to TALP LTI 1.3 Test Application. Connect seamlessly to external learning tools using the latest LTI 1.3 standard.</p>
+            <p>Welcome to LTI 1.3 Test Platform. Connect seamlessly to Moodle LMS using the latest LTI 1.3 standard.</p>
         </div>
 
         <div class="launch-section">
-            <h2>🎯 Launch External Learning Tool</h2>
-            <p>Click the button below to securely launch and access <strong>LEAF</strong> (Saltire Learning Tool for testing). A random user identity will be generated automatically to simulate a logged-in student or instructor.</p>
+            <h2>🎯 Launch Moodle Course</h2>
+            <p>Click the button below to securely launch and login to <strong>Moodle</strong> with a randomly generated user. A user identity will be created automatically to simulate a logged-in student or instructor.</p>
 
             <form method="POST" action="">
-                <button type="submit" name="launch_to_saltire" class="launch-btn">
-                    🔗 Login to LEAF
+                <button type="submit" name="launch_to_moodle" class="launch-btn">
+                    🔗 Login to Moodle
                 </button>
             </form>
         </div>
@@ -238,15 +240,15 @@ if ($_POST && isset($_POST['launch_to_saltire'])) {
             <h3>🔒 What happens when you click?</h3>
             <p><strong>1. User Generation:</strong> We'll create a random user identity (name, email, role)</p>
             <p><strong>2. Security Setup:</strong> Generate secure state and nonce values for the session</p>
-            <p><strong>3. OIDC Initiation:</strong> Start the OpenID Connect login flow with Saltire</p>
-            <p><strong>4. Tool Launch:</strong> Saltire will authenticate and launch the learning tool</p>
+            <p><strong>3. OIDC Initiation:</strong> Start the OpenID Connect login flow with Moodle</p>
+            <p><strong>4. Tool Launch:</strong> Moodle will authenticate and launch the course</p>
         </div>
 
         <div class="platform-info">
             <h3>📋 Platform Information</h3>
             <p><strong>Platform Issuer:</strong> <code><?php echo PLATFORM_ISSUER; ?></code></p>
-            <p><strong>Target Tool:</strong> <code><?php echo SALTIRE_TOOL_DOMAIN; ?></code></p>
-            <p><strong>Client ID:</strong> <code><?php echo SALTIRE_CLIENT_ID; ?></code></p>
+            <p><strong>Target Tool:</strong> <code><?php echo MOODLE_TOOL_DOMAIN; ?></code></p>
+            <p><strong>Client ID:</strong> <code><?php echo MOODLE_CLIENT_ID; ?></code></p>
             <p><strong>Deployment ID:</strong> <code><?php echo DEFAULT_DEPLOYMENT_ID; ?></code></p>
         </div>
     </div>

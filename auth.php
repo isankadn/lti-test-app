@@ -7,6 +7,7 @@ session_start();
 
 // Load central configuration
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/bookroll_config.php';
 
 /**
  * LTI 1.3 Platform Authentication Endpoint
@@ -15,25 +16,13 @@ require_once __DIR__ . '/config.php';
  */
 
 /**
- * Generate RSA key pair for demo purposes
+ * Get the platform's private key for JWT signing
  */
-function generateDemoKeyPair() {
-    $keyFile = __DIR__ . '/demo_private_key.pem';
+function getPlatformPrivateKey() {
+    $keyFile = __DIR__ . '/platform_pkcs8.key';
 
     if (!file_exists($keyFile)) {
-        logMessage("Generating new RSA key pair for demo", null, 'AUTH');
-
-        $config = [
-            'digest_alg' => 'sha256',
-            'private_key_bits' => 2048,
-            'private_key_type' => OPENSSL_KEYTYPE_RSA,
-        ];
-
-        $resource = openssl_pkey_new($config);
-        openssl_pkey_export($resource, $privateKey);
-        file_put_contents($keyFile, $privateKey);
-
-        logMessage("RSA key pair generated and saved", ['key_file' => $keyFile], 'AUTH');
+        throw new Exception("Platform private key file not found: $keyFile. Please ensure platform keys are generated.");
     }
 
     return file_get_contents($keyFile);
@@ -47,12 +36,12 @@ function base64UrlEncode($data) {
 }
 
 function createJWT($header, $payload) {
-    $headerEncoded = base64UrlEncode(json_encode($header));
-    $payloadEncoded = base64UrlEncode(json_encode($payload));
+    $headerEncoded = base64UrlEncode(json_encode($header, JSON_UNESCAPED_SLASHES));
+    $payloadEncoded = base64UrlEncode(json_encode($payload, JSON_UNESCAPED_SLASHES));
     $dataToSign = $headerEncoded . '.' . $payloadEncoded;
 
-    // Get private key
-    $privateKey = generateDemoKeyPair();
+    // Get platform's private key for signing
+    $privateKey = getPlatformPrivateKey();
     $key = openssl_pkey_get_private($privateKey);
 
     if (!$key) {
@@ -90,13 +79,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         }
     }
 
-    // Validate client_id
-    if ($params['client_id'] !== MOODLE_CLIENT_ID) {
-        logMessage("Invalid client_id", ['received' => $params['client_id'], 'expected' => MOODLE_CLIENT_ID], 'AUTH');
+    // Validate client_id (supports both Moodle and Bookroll)
+    $validClientIds = [MOODLE_CLIENT_ID, BOOKROLL_CLIENT_ID];
+    if (!in_array($params['client_id'], $validClientIds)) {
+        logMessage("Invalid client_id", [
+            'received' => $params['client_id'],
+            'expected_moodle' => MOODLE_CLIENT_ID,
+            'expected_bookroll' => BOOKROLL_CLIENT_ID
+        ], 'AUTH');
         http_response_code(400);
         echo "Bad Request: Invalid client_id";
         exit;
     }
+
+    // Determine tool type based on client_id or tool_type parameter
+    $toolType = isset($params['tool_type']) ? $params['tool_type'] :
+               ($params['client_id'] === BOOKROLL_CLIENT_ID ? 'bookroll' : 'moodle');
+
+    logMessage("Tool type determined", ['tool_type' => $toolType, 'client_id' => $params['client_id']], 'AUTH');
 
     // Try to get user from session first
     $user = $_SESSION['user'] ?? null;
@@ -128,8 +128,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         'user' => $user,
         'client_id' => $params['client_id'],
         'redirect_uri' => $params['redirect_uri'],
-        'moodle_state' => $params['state'],
-        'moodle_nonce' => $params['nonce']
+        'state' => $params['state'],
+        'nonce' => $params['nonce'],
+        'tool_type' => $toolType
     ], 'AUTH');
 
     try {
@@ -151,10 +152,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
             'iat' => $now,
             'nonce' => $params['nonce'], // Use the nonce from Moodle's request
 
+            // Additional claims that Bookroll expects
+            'client_id' => $params['client_id'], // Bookroll looks for this as a direct claim
+            'originalIss' => PLATFORM_ISSUER, // Bookroll checks for originalIss first
+
             // LTI specific claims
             'https://purl.imsglobal.org/spec/lti/claim/message_type' => 'LtiResourceLinkRequest',
             'https://purl.imsglobal.org/spec/lti/claim/version' => '1.3.0',
-            'https://purl.imsglobal.org/spec/lti/claim/deployment_id' => DEFAULT_DEPLOYMENT_ID,
+            'https://purl.imsglobal.org/spec/lti/claim/deployment_id' =>
+                ($toolType === 'bookroll') ? BOOKROLL_DEPLOYMENT_ID : DEFAULT_DEPLOYMENT_ID,
             'https://purl.imsglobal.org/spec/lti/claim/target_link_uri' => $params['redirect_uri'],
 
             // User information
@@ -227,12 +233,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
             ]
         ], 'AUTH');
 
+        // Log the actual JWT token for debugging
+        logMessage("ACTUAL JWT TOKEN SENT TO BOOKROLL", [
+            'jwt_token' => $idToken
+        ], 'BOOKROLL_DEBUG');
+
+        // Log the exact claims that Bookroll will use for database lookup
+        logMessage("BOOKROLL DATABASE LOOKUP CLAIMS", [
+            'originalIss' => $payload['originalIss'] ?? 'NOT_SET',
+            'iss' => $payload['iss'],
+            'client_id' => $payload['client_id'] ?? 'NOT_SET',
+            'deployment_id' => $payload['https://purl.imsglobal.org/spec/lti/claim/deployment_id'] ?? 'NOT_SET',
+            'tool_type' => $toolType,
+            'full_payload_keys' => array_keys($payload)
+        ], 'BOOKROLL_DEBUG');
+
+        // Also log what's being searched in database
+        logMessage("DATABASE LOOKUP QUERY EQUIVALENT", [
+            'query' => "SELECT * FROM br_lti13_iss_configuration WHERE iss = '" . $payload['originalIss'] . "' AND client_id = '" . $payload['client_id'] . "' AND deployment_id = '" . $payload['https://purl.imsglobal.org/spec/lti/claim/deployment_id'] . "'"
+        ], 'BOOKROLL_DEBUG');
+
         // Respond with form post to Moodle
         ?>
         <!DOCTYPE html>
         <html>
         <head>
-            <title>LTI 1.3 Launch - Redirecting to Moodle</title>
+            <title>LTI 1.3 Launch - Redirecting to <?php echo ucfirst($toolType); ?></title>
             <style>
                 body {
                     font-family: Arial, sans-serif;
@@ -269,16 +295,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         </head>
         <body>
             <div class="container">
-                <h2>🚀 Launching Moodle Course</h2>
+                <h2>🚀 Launching <?php echo ucfirst($toolType); ?> Course</h2>
                 <div class="spinner"></div>
-                <p>Redirecting to Moodle LMS...</p>
+                <p>Redirecting to <?php echo ucfirst($toolType); ?>...</p>
                 <p><small>If you are not redirected automatically, please click the button below.</small></p>
 
                 <form id="launchForm" method="POST" action="<?php echo htmlspecialchars($params['redirect_uri']); ?>">
                     <input type="hidden" name="id_token" value="<?php echo htmlspecialchars($idToken); ?>">
                     <input type="hidden" name="state" value="<?php echo htmlspecialchars($params['state']); ?>">
                     <button type="submit" style="background: #28a745; color: white; border: none; padding: 10px 20px; border-radius: 5px; margin-top: 20px;">
-                        Continue to Moodle
+                        Continue to <?php echo ucfirst($toolType); ?>
                     </button>
                 </form>
             </div>

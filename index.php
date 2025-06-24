@@ -3,29 +3,101 @@ session_start();
 
 // Load central configuration
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/bookroll_config.php';
 
-// Handle form submission for launching to Moodle
-if ($_POST && isset($_POST['launch_to_moodle'])) {
+/**
+ * Create a JWT state parameter for Bookroll
+ */
+function createBookrollStateJWT($nonce, $loginHint, $messageHint) {
+    // Load the private key
+    $keyFile = __DIR__ . '/demo_private_key.pem';
+    if (!file_exists($keyFile)) {
+        // Generate key if it doesn't exist
+        $config = [
+            'digest_alg' => 'sha256',
+            'private_key_bits' => 2048,
+            'private_key_type' => OPENSSL_KEYTYPE_RSA,
+        ];
+        $resource = openssl_pkey_new($config);
+        openssl_pkey_export($resource, $privateKey);
+        file_put_contents($keyFile, $privateKey);
+    }
+
+    $privateKey = file_get_contents($keyFile);
+
+    // Create JWT header
+    $header = [
+        'kid' => JWT_KEY_ID,
+        'typ' => 'JWT',
+        'alg' => 'RS256'
+    ];
+
+    // Create JWT payload for state
+    $now = time();
+    $payload = [
+        'iss' => 'ltiStarter',
+        'sub' => PLATFORM_ISSUER,
+        'aud' => BOOKROLL_CLIENT_ID,
+        'exp' => $now + 3600, // 1 hour
+        'nbf' => $now,
+        'iat' => $now,
+        'jti' => $nonce,
+        'nonce' => $nonce,
+        'originalIss' => PLATFORM_ISSUER,
+        'loginHint' => $loginHint,
+        'ltiMessageHint' => $messageHint,
+        'targetLinkUri' => BOOKROLL_LAUNCH_URL,
+        'clientId' => BOOKROLL_CLIENT_ID,
+        'ltiDeploymentId' => BOOKROLL_DEPLOYMENT_ID,
+        'controller' => '/oidc/login_initiations'
+    ];
+
+    // Base64URL encode header and payload
+    $headerEncoded = rtrim(strtr(base64_encode(json_encode($header)), '+/', '-_'), '=');
+    $payloadEncoded = rtrim(strtr(base64_encode(json_encode($payload)), '+/', '-_'), '=');
+    $dataToSign = $headerEncoded . '.' . $payloadEncoded;
+
+    // Sign with private key
+    $key = openssl_pkey_get_private($privateKey);
+    if (!$key) {
+        throw new Exception('Invalid private key');
+    }
+
+    $signResult = openssl_sign($dataToSign, $signature, $key, OPENSSL_ALGO_SHA256);
+    if (!$signResult) {
+        throw new Exception('Failed to sign JWT');
+    }
+
+    $signatureEncoded = rtrim(strtr(base64_encode($signature), '+/', '-_'), '=');
+    return $dataToSign . '.' . $signatureEncoded;
+}
+
+// Handle form submission for launching to Bookroll
+if ($_POST && isset($_POST['launch_to_bookroll'])) {
     // Generate random user (simulating logged-in user)
     $user = generateRandomUser();
 
     // Store user in session
     $_SESSION['user'] = $user;
+    $_SESSION['target_tool'] = 'bookroll'; // Store which tool we're launching to
 
-    // Generate state and nonce for security
-    $state = bin2hex(random_bytes(16));
+    // Generate nonce for security
     $nonce = bin2hex(random_bytes(16));
+    $ltiMessageHint = 'hint_' . bin2hex(random_bytes(8));
+
+    // Create JWT state parameter for Bookroll
+    $state = createBookrollStateJWT($nonce, $user['user_id'], $ltiMessageHint);
 
     // Store security values in session
     $_SESSION['state'] = $state;
     $_SESSION['nonce'] = $nonce;
-    $_SESSION['lti_message_hint'] = 'hint_' . bin2hex(random_bytes(8));
+    $_SESSION['lti_message_hint'] = $ltiMessageHint;
 
     // Force session save before redirect
     session_write_close();
     session_start();
 
-    logMessage("Initiating LTI 1.3 launch to Moodle", [
+    logMessage("Initiating LTI 1.3 launch to Bookroll", [
         'user' => $user,
         'state' => $state,
         'nonce' => $nonce,
@@ -36,23 +108,23 @@ if ($_POST && isset($_POST['launch_to_moodle'])) {
         ]
     ], 'LAUNCH_INIT');
 
-    // Build OIDC login initiation request
+    // Build OIDC login initiation request for Bookroll
     $oidcParams = [
         'iss' => PLATFORM_ISSUER,
         'login_hint' => $user['user_id'],
-        'target_link_uri' => MOODLE_LAUNCH_URL,
-        'client_id' => MOODLE_CLIENT_ID,
-        'lti_deployment_id' => DEFAULT_DEPLOYMENT_ID,
+        'target_link_uri' => BOOKROLL_LAUNCH_URL,
+        'client_id' => BOOKROLL_CLIENT_ID,
+        'lti_deployment_id' => BOOKROLL_DEPLOYMENT_ID,
         'lti_message_hint' => $_SESSION['lti_message_hint']
     ];
 
-    // Check if MOODLE_OIDC_LOGIN_URL already has parameters
-    $separator = (strpos(MOODLE_OIDC_LOGIN_URL, '?') !== false) ? '&' : '?';
-    $oidcUrl = MOODLE_OIDC_LOGIN_URL . $separator . http_build_query($oidcParams);
+    // Check if BOOKROLL_OIDC_LOGIN_URL already has parameters
+    $separator = (strpos(BOOKROLL_OIDC_LOGIN_URL, '?') !== false) ? '&' : '?';
+    $oidcUrl = BOOKROLL_OIDC_LOGIN_URL . $separator . http_build_query($oidcParams);
 
-    logMessage("Redirecting to Moodle OIDC login", ['url' => $oidcUrl], 'LAUNCH_INIT');
+    logMessage("Redirecting to Bookroll OIDC login", ['url' => $oidcUrl], 'LAUNCH_INIT');
 
-    // Redirect to Moodle's OIDC login endpoint
+    // Redirect to Bookroll's OIDC login endpoint
     header("Location: $oidcUrl");
     exit;
 }
@@ -226,12 +298,12 @@ if ($_POST && isset($_POST['launch_to_moodle'])) {
         </div>
 
         <div class="launch-section">
-            <h2>🎯 Launch Moodle Course</h2>
-            <p>Click the button below to securely launch and login to <strong>Moodle</strong> with a randomly generated user. A user identity will be created automatically to simulate a logged-in student or instructor.</p>
+            <h2>🎯 Launch Bookroll Course</h2>
+            <p>Click the button below to securely launch and login to <strong>Bookroll</strong> with a randomly generated user. A user identity will be created automatically to simulate a logged-in student or instructor.</p>
 
             <form method="POST" action="">
-                <button type="submit" name="launch_to_moodle" class="launch-btn">
-                    🔗 Login to Moodle
+                <button type="submit" name="launch_to_bookroll" class="launch-btn">
+                    🔗 Login to Bookroll
                 </button>
             </form>
         </div>
@@ -240,16 +312,16 @@ if ($_POST && isset($_POST['launch_to_moodle'])) {
             <h3>🔒 What happens when you click?</h3>
             <p><strong>1. User Generation:</strong> We'll create a random user identity (name, email, role)</p>
             <p><strong>2. Security Setup:</strong> Generate secure state and nonce values for the session</p>
-            <p><strong>3. OIDC Initiation:</strong> Start the OpenID Connect login flow with Moodle</p>
-            <p><strong>4. Tool Launch:</strong> Moodle will authenticate and launch the course</p>
+            <p><strong>3. OIDC Initiation:</strong> Start the OpenID Connect login flow with Bookroll</p>
+            <p><strong>4. Tool Launch:</strong> Bookroll will authenticate and launch the course</p>
         </div>
 
         <div class="platform-info">
             <h3>📋 Platform Information</h3>
             <p><strong>Platform Issuer:</strong> <code><?php echo PLATFORM_ISSUER; ?></code></p>
-            <p><strong>Target Tool:</strong> <code><?php echo MOODLE_TOOL_DOMAIN; ?></code></p>
-            <p><strong>Client ID:</strong> <code><?php echo MOODLE_CLIENT_ID; ?></code></p>
-            <p><strong>Deployment ID:</strong> <code><?php echo DEFAULT_DEPLOYMENT_ID; ?></code></p>
+            <p><strong>Target Tool:</strong> <code><?php echo BOOKROLL_TOOL_DOMAIN; ?></code></p>
+            <p><strong>Client ID:</strong> <code><?php echo BOOKROLL_CLIENT_ID; ?></code></p>
+            <p><strong>Deployment ID:</strong> <code><?php echo BOOKROLL_DEPLOYMENT_ID; ?></code></p>
         </div>
     </div>
 </body>

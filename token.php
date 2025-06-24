@@ -1,10 +1,11 @@
 <?php
 /**
  * LTI 1.3 Platform Token Endpoint
- * This handles OAuth 2.0 token requests from Moodle
+ * This handles OAuth 2.0 token requests from LTI tools (Moodle/Bookroll)
  */
 
 require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/bookroll_config.php';
 
 header('Content-Type: application/json');
 
@@ -38,13 +39,22 @@ if ($grant_type !== 'client_credentials') {
     exit;
 }
 
-// Validate client_id
-if ($client_id !== MOODLE_CLIENT_ID) {
-    logMessage("Invalid client_id", ['received' => $client_id, 'expected' => MOODLE_CLIENT_ID], 'TOKEN');
+// Validate client_id (supports both Moodle and Bookroll)
+$validClientIds = [MOODLE_CLIENT_ID, BOOKROLL_CLIENT_ID];
+if (!in_array($client_id, $validClientIds)) {
+    logMessage("Invalid client_id", [
+        'received' => $client_id,
+        'expected_moodle' => MOODLE_CLIENT_ID,
+        'expected_bookroll' => BOOKROLL_CLIENT_ID
+    ], 'TOKEN');
     http_response_code(401);
     echo json_encode(['error' => 'invalid_client', 'message' => 'Invalid client_id']);
     exit;
 }
+
+// Determine tool type
+$toolType = ($client_id === BOOKROLL_CLIENT_ID) ? 'bookroll' : 'moodle';
+logMessage("Token request from tool", ['tool_type' => $toolType, 'client_id' => $client_id], 'TOKEN');
 
 try {
     // In production, you should:
@@ -53,9 +63,10 @@ try {
     // 3. Check the claims (iss, sub, aud, exp, etc.)
 
     // For demo purposes, we'll create a simple access token
-    logMessage("Creating access token for Moodle", [
+    logMessage("Creating access token for " . ucfirst($toolType), [
         'client_id' => $client_id,
-        'scope' => $scope
+        'scope' => $scope,
+        'tool_type' => $toolType
     ], 'TOKEN');
 
     $issuedAt = time();

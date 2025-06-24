@@ -148,9 +148,9 @@
     <div class="log-section">
         <h2>📋 Current Configuration</h2>
         <ul>
-            <li><strong>Platform Issuer:</strong> <code>https://412a-133-3-201-44.ngrok-free.app</code></li>
-            <li><strong>Auth Endpoint:</strong> <code>https://412a-133-3-201-44.ngrok-free.app/auth.php</code></li>
-            <li><strong>JWKS Endpoint:</strong> <code>https://412a-133-3-201-44.ngrok-free.app/jwks.php</code></li>
+            <li><strong>Platform Issuer:</strong> <code>https://a135-133-3-201-44.ngrok-free.app</code></li>
+            <li><strong>Auth Endpoint:</strong> <code>https://a135-133-3-201-44.ngrok-free.app/auth.php</code></li>
+            <li><strong>JWKS Endpoint:</strong> <code>https://a135-133-3-201-44.ngrok-free.app/jwks.php</code></li>
             <li><strong>Deployment ID:</strong> <code>cLWwj9cbmkSrCNsckEFBmA</code></li>
             <li><strong>Key ID:</strong> <code>f7mdvdmmni</code></li>
         </ul>

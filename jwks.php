@@ -12,20 +12,20 @@ header('Content-Type: application/json');
 logMessage("JWKS endpoint called", $_REQUEST, 'JWKS');
 
 /**
- * Get public key from private key file
+ * Get platform's public key details for JWKS endpoint
  */
-function getPublicKeyFromPrivateKey() {
-    $keyFile = __DIR__ . '/demo_private_key.pem';
+function getPlatformPublicKeyDetails() {
+    $keyFile = __DIR__ . '/platform_publickey.crt';
 
     if (!file_exists($keyFile)) {
-        return null;
+        throw new Exception("Platform public key file not found: $keyFile");
     }
 
-    $privateKey = file_get_contents($keyFile);
-    $keyResource = openssl_pkey_get_private($privateKey);
+    $publicKey = file_get_contents($keyFile);
+    $keyResource = openssl_pkey_get_public($publicKey);
 
     if (!$keyResource) {
-        return null;
+        throw new Exception("Invalid platform public key format");
     }
 
     $keyDetails = openssl_pkey_get_details($keyResource);
@@ -37,10 +37,10 @@ function base64UrlEncode($data) {
 }
 
 try {
-    $keyDetails = getPublicKeyFromPrivateKey();
+    $keyDetails = getPlatformPublicKeyDetails();
 
     if (!$keyDetails || !isset($keyDetails['rsa'])) {
-        throw new Exception('Unable to extract public key details');
+        throw new Exception('Unable to extract platform public key details');
     }
 
     $rsaKey = $keyDetails['rsa'];
@@ -50,7 +50,7 @@ try {
         'kty' => 'RSA',
         'use' => 'sig',
         'alg' => 'RS256',
-        'kid' => 'demo-key-1',
+        'kid' => 'platform-key-1',
         'n' => base64UrlEncode($rsaKey['n']),
         'e' => base64UrlEncode($rsaKey['e'])
     ];

@@ -5,7 +5,7 @@ This guide will help you configure your Moodle instance (`https://twdemo.leaf.ed
 ## Overview
 - **Your Platform**: Acts as LTI Platform (this PHP application)
 - **Moodle**: Acts as LTI Tool Provider (receives launches)
-- **Flow**: Click "Login to Moodle" → Platform launches user → User appears in Moodle course
+- **Flow**: Click "Login to Bookrool" → Platform launches user → User appears in Moodle course
 
 ## Step 1: Enable LTI Provider in Moodle
 
@@ -97,7 +97,7 @@ define('MOODLE_SHARED_SECRET', 'your-secret-key-123'); // Same as in Moodle
 
 ### 5.1: Test from Platform
 1. Navigate to your platform: `https://your-platform-domain.com`
-2. Click **"Login to Moodle"**
+2. Click **"Login to Bookroll"**
 3. Check the browser network tab and `launch.log` for debugging
 
 ### 5.2: Expected Flow

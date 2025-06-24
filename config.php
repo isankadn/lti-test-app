@@ -7,7 +7,7 @@
 // Auto-detect current domain and protocol
 // Force HTTPS for ngrok deployment (LTI 1.3 requires HTTPS)
 $protocol = 'https://';
-$host = $_SERVER['HTTP_HOST'];
+$host = $_SERVER['HTTP_HOST'] ?? '0cf5-133-3-201-44.ngrok-free.app'; // Updated fallback for CLI
 $currentDomain = $protocol . $host;
 
 // LTI 1.3 Platform Configuration (this app)
@@ -16,7 +16,7 @@ define('PLATFORM_ISSUER', PLATFORM_DOMAIN);
 define('PLATFORM_CLIENT_ID', 'php-lti-platform-client'); // Must match Moodle Client ID
 
 // Moodle Tool Configuration (target) - LTI 1.3
-define('MOODLE_TOOL_DOMAIN', 'https://twdemo.leaf.ederc.jp/moodle');
+define('MOODLE_TOOL_DOMAIN', 'https://newleaf.let.media.kyoto-u.ac.jp/moodle');
 define('MOODLE_CLIENT_ID', 'php-lti-platform-client'); // Must match Client ID in Moodle
 define('MOODLE_OIDC_LOGIN_URL', MOODLE_TOOL_DOMAIN . '/enrol/lti/login.php?id=f9eb37adaea447d0c1295833104a3616277b534cad049de9fcf9ace1ca12');
 define('MOODLE_LAUNCH_URL', MOODLE_TOOL_DOMAIN . '/enrol/lti/launch.php');
@@ -35,7 +35,7 @@ define('DEFAULT_DEPLOYMENT_ID', 'Main Deployment');
 
 // LTI Tool Configuration
 define('MOODLE_PUBLISHED_TOOL_ID', '0fb3eb68-d9ea-4cc2-addb-9b9dd5f9f262'); // Published LTI tool ID from Moodle
-define('JWT_KEY_ID', 'demo-key-1'); // JWT Key ID for signing
+define('JWT_KEY_ID', 'platform-key-1'); // JWT Key ID for signing
 define('JWT_EXPIRY_HOURS', 1); // JWT token expiry in hours
 
 // Demo User Configuration

@@ -1,22 +1,47 @@
 <?php
+// Configure session cookies for cross-origin LTI support
+session_set_cookie_params([
+    'lifetime' => 3600,
+    'path' => '/',
+    'domain' => '', // Keep empty for current domain
+    'secure' => true,
+    'httponly' => true,
+    'samesite' => 'None' // Allow cross-site cookies for LTI
+]);
+
 session_start();
 
 // Load central configuration
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/bookroll_config.php';
+require_once __DIR__ . '/analysis_config.php';
 
 /**
- * LTI 1.3 OIDC Authentication Endpoint
- * This handles the authentication request from Bookroll
- * This is NOT a login initiation endpoint, but the authentication endpoint itself
+ * LTI 1.3 Platform OIDC Authentication Endpoint
+ *
+ * This handles Step 2 of the LTI 1.3 launch flow:
+ * After we POST to the tool's login initiation endpoint,
+ * the tool redirects the user here with authentication parameters.
+ *
+ * Our job is to validate the request and redirect to auth.php
+ * which will generate the JWT ID token and send it to the tool's launch endpoint.
  */
 
-logMessage("=== OIDC Authentication Endpoint Called ===", $_REQUEST, 'OIDC_AUTH');
+logMessage("=== Platform OIDC Authentication Endpoint Called ===", [
+    'method' => $_SERVER['REQUEST_METHOD'],
+    'get_params' => $_GET,
+    'post_params' => $_POST,
+    'session_data' => [
+        'user_exists' => isset($_SESSION['user']),
+        'target_tool' => $_SESSION['target_tool'] ?? 'not_set',
+        'nonce' => $_SESSION['nonce'] ?? 'not_set'
+    ]
+], 'OIDC_AUTH');
 
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     $params = $_GET;
 
-    // These are the parameters that Bookroll actually sends
+    // Validate required parameters that the tool should send
     $requiredParams = ['client_id', 'login_hint', 'nonce', 'redirect_uri', 'response_type', 'scope'];
     $missingParams = [];
 
@@ -27,7 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     }
 
     if (!empty($missingParams)) {
-        logMessage("Missing required parameters", [
+        logMessage("Missing required parameters from tool", [
             'missing' => $missingParams,
             'received' => array_keys($params)
         ], 'OIDC_AUTH');
@@ -39,11 +64,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         exit;
     }
 
-    // Validate client ID
-    if ($params['client_id'] !== BOOKROLL_CLIENT_ID) {
-        logMessage("Invalid client_id in OIDC auth", [
+    // Validate client ID and determine tool type
+    $toolType = null;
+    if ($params['client_id'] === BOOKROLL_CLIENT_ID) {
+        $toolType = 'bookroll';
+    } elseif ($params['client_id'] === ANALYSIS_CLIENT_ID) {
+        $toolType = 'analysis';
+    } else {
+        logMessage("Invalid client_id from tool", [
             'received' => $params['client_id'],
-            'expected' => BOOKROLL_CLIENT_ID
+            'expected_bookroll' => BOOKROLL_CLIENT_ID,
+            'expected_analysis' => ANALYSIS_CLIENT_ID
         ], 'OIDC_AUTH');
         http_response_code(400);
         echo json_encode(['error' => 'invalid_client', 'error_description' => 'Invalid client_id']);
@@ -52,56 +83,54 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
 
     // Validate response_type
     if ($params['response_type'] !== 'id_token') {
-        logMessage("Invalid response_type", ['received' => $params['response_type']], 'OIDC_AUTH');
+        logMessage("Invalid response_type from tool", ['received' => $params['response_type']], 'OIDC_AUTH');
         http_response_code(400);
         echo json_encode(['error' => 'unsupported_response_type', 'error_description' => 'Only id_token is supported']);
         exit;
     }
 
-    // Generate or retrieve user (simulating platform user lookup based on login_hint)
-    $user = [
-        'user_id' => $params['login_hint'],
-        'name' => 'Generated User',
-        'given_name' => 'Generated',
-        'family_name' => 'User',
-        'email' => $params['login_hint'] . '@example.edu',
-        'role' => 'learner',
-        'roles' => ['http://purl.imsglobal.org/vocab/lis/v2/membership#Learner']
-    ];
-
-    // Store user and request details in session
-    $_SESSION['user'] = $user;
-    $_SESSION['target_tool'] = 'bookroll';
-    $_SESSION['login_hint'] = $params['login_hint'];
-    $_SESSION['redirect_uri'] = $params['redirect_uri'];
-    $_SESSION['client_id'] = $params['client_id'];
-    $_SESSION['nonce'] = $params['nonce'];  // Use the nonce from Bookroll
-    $_SESSION['state'] = $params['state'] ?? null;
-
-    // Store LTI message hint if provided
-    if (isset($params['lti_message_hint'])) {
-        $_SESSION['lti_message_hint'] = $params['lti_message_hint'];
+    // Get user from session (should have been set when we initiated the launch)
+    if (!isset($_SESSION['user'])) {
+        logMessage("No user found in session - this shouldn't happen", [
+            'session_id' => session_id(),
+            'session_contents' => array_keys($_SESSION)
+        ], 'OIDC_AUTH');
+        http_response_code(400);
+        echo json_encode(['error' => 'invalid_request', 'error_description' => 'No user session found']);
+        exit;
     }
 
-    logMessage("OIDC authentication request processed", [
-        'user' => $user,
+    $user = $_SESSION['user'];
+
+    // Verify the login_hint matches our user (security check)
+    if ($params['login_hint'] !== $user['user_id']) {
+        logMessage("Login hint mismatch", [
+            'tool_login_hint' => $params['login_hint'],
+            'session_user_id' => $user['user_id']
+        ], 'OIDC_AUTH');
+        // In production, you might want to fail here, but for demo we'll allow it
+    }
+
+    logMessage("Tool authentication request validated", [
+        'tool_type' => $toolType,
         'client_id' => $params['client_id'],
         'login_hint' => $params['login_hint'],
         'redirect_uri' => $params['redirect_uri'],
         'nonce' => $params['nonce'],
-        'state' => $params['state'] ?? 'not_provided'
+        'state' => $params['state'] ?? 'not_provided',
+        'user_from_session' => $user['user_id']
     ], 'OIDC_AUTH');
 
-    // Build the authentication request parameters for our auth.php endpoint
+    // Now redirect to our auth.php endpoint to generate the JWT ID token
     $authParams = [
         'response_type' => 'id_token',
         'scope' => 'openid',
         'response_mode' => 'form_post',
         'client_id' => $params['client_id'],
-        'redirect_uri' => $params['redirect_uri'],
+        'redirect_uri' => $params['redirect_uri'],  // Tool's launch endpoint
         'login_hint' => $params['login_hint'],
-        'nonce' => $params['nonce'],  // Critical: Use Bookroll's nonce
-        'tool_type' => 'bookroll'
+        'nonce' => $params['nonce'],  // Use the nonce from the tool
+        'tool_type' => $toolType
     ];
 
     // Add state if provided
@@ -114,10 +143,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $authParams['lti_message_hint'] = $params['lti_message_hint'];
     }
 
-    // Redirect to our authentication endpoint which will create the JWT
+    // Build the URL to our auth endpoint
     $authUrl = PLATFORM_AUTH_URL . '?' . http_build_query($authParams);
 
-    logMessage("Redirecting to platform auth endpoint", ['url' => $authUrl], 'OIDC_AUTH');
+    logMessage("Redirecting to platform auth endpoint to generate JWT", [
+        'url' => $authUrl,
+        'tool_type' => $toolType,
+        'params_for_auth' => $authParams
+    ], 'OIDC_AUTH');
 
     header("Location: $authUrl");
     exit;

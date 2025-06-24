@@ -7,12 +7,14 @@
 // Load main configuration
 require_once __DIR__ . '/config.php';
 
-// Bookroll Tool Configuration
-define('BOOKROLL_TOOL_DOMAIN', 'https://newleaf.let.media.kyoto-u.ac.jp/bookroll/');
+// Bookroll Tool Configuration (Tool endpoints and identifiers)
+define('BOOKROLL_TOOL_DOMAIN', BOOKROLL_TOOL_BASE_DOMAIN);
 define('BOOKROLL_CLIENT_ID', 'bookroll-client-id');
-define('BOOKROLL_CONSUMER_KEY', '40DCD79F-1A39-4004-A439-8E9155FAE0FD');
-define('BOOKROLL_OIDC_LOGIN_URL', 'https://newleaf.let.media.kyoto-u.ac.jp/bookroll/oidc/login_initiations');
-define('BOOKROLL_LAUNCH_URL', 'https://newleaf.let.media.kyoto-u.ac.jp/bookroll/lti3');
+define('BOOKROLL_CONSUMER_KEY', 'bookroll-consumer-key');
+
+// Bookroll Tool Endpoints (where we send requests TO the tool)
+define('BOOKROLL_OIDC_LOGIN_URL', BOOKROLL_TOOL_BASE_DOMAIN . '/oidc/login_initiations');
+define('BOOKROLL_LAUNCH_URL', BOOKROLL_TOOL_BASE_DOMAIN . '/lti3');
 define('BOOKROLL_DEPLOYMENT_ID', '2');
 
 // Configuration Summary for Bookroll Setup

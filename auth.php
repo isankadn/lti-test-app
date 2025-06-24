@@ -3,11 +3,22 @@
  * LTI 1.3 Authentication Endpoint
  * This receives the authentication request from Moodle and responds with a JWT
  */
+// Configure session cookies for cross-origin LTI support
+session_set_cookie_params([
+    'lifetime' => 3600,
+    'path' => '/',
+    'domain' => '', // Keep empty for current domain
+    'secure' => true,
+    'httponly' => true,
+    'samesite' => 'None' // Allow cross-site cookies for LTI
+]);
+
 session_start();
 
 // Load central configuration
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/bookroll_config.php';
+require_once __DIR__ . '/analysis_config.php';
 
 /**
  * LTI 1.3 Platform Authentication Endpoint
@@ -79,13 +90,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         }
     }
 
-    // Validate client_id (supports both Moodle and Bookroll)
-    $validClientIds = [MOODLE_CLIENT_ID, BOOKROLL_CLIENT_ID];
+    // Validate client_id (supports Moodle, Bookroll, and Analysis)
+    $validClientIds = [MOODLE_CLIENT_ID, BOOKROLL_CLIENT_ID, ANALYSIS_CLIENT_ID];
     if (!in_array($params['client_id'], $validClientIds)) {
         logMessage("Invalid client_id", [
             'received' => $params['client_id'],
             'expected_moodle' => MOODLE_CLIENT_ID,
-            'expected_bookroll' => BOOKROLL_CLIENT_ID
+            'expected_bookroll' => BOOKROLL_CLIENT_ID,
+            'expected_analysis' => ANALYSIS_CLIENT_ID
         ], 'AUTH');
         http_response_code(400);
         echo "Bad Request: Invalid client_id";
@@ -93,10 +105,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
     }
 
     // Determine tool type based on client_id or tool_type parameter
-    $toolType = isset($params['tool_type']) ? $params['tool_type'] :
-               ($params['client_id'] === BOOKROLL_CLIENT_ID ? 'bookroll' : 'moodle');
+    $toolType = isset($params['tool_type']) ? $params['tool_type'] : 'moodle'; // default
+
+    if (!isset($params['tool_type'])) {
+        if ($params['client_id'] === BOOKROLL_CLIENT_ID) {
+            $toolType = 'bookroll';
+        } elseif ($params['client_id'] === ANALYSIS_CLIENT_ID) {
+            $toolType = 'analysis';
+        } else {
+            $toolType = 'moodle'; // default for MOODLE_CLIENT_ID
+        }
+    }
 
     logMessage("Tool type determined", ['tool_type' => $toolType, 'client_id' => $params['client_id']], 'AUTH');
+
+    // Ensure lti_tool_id is maintained in session for Analysis tool
+    if ($toolType === 'analysis' && !isset($_SESSION['lti_tool_id'])) {
+        $_SESSION['lti_tool_id'] = 2;
+        logMessage("Setting lti_tool_id=2 in session for Analysis tool", ['session_id' => session_id()], 'AUTH');
+    } elseif ($toolType === 'bookroll' && !isset($_SESSION['lti_tool_id'])) {
+        $_SESSION['lti_tool_id'] = 1;
+        logMessage("Setting lti_tool_id=1 in session for Bookroll tool", ['session_id' => session_id()], 'AUTH');
+    }
 
     // Try to get user from session first
     $user = $_SESSION['user'] ?? null;
@@ -124,13 +154,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         $_SESSION['user'] = $user;
     }
 
-    logMessage("Creating LTI launch JWT token", [
+            logMessage("Creating LTI launch JWT token", [
         'user' => $user,
         'client_id' => $params['client_id'],
         'redirect_uri' => $params['redirect_uri'],
         'state' => $params['state'],
         'nonce' => $params['nonce'],
-        'tool_type' => $toolType
+        'tool_type' => $toolType,
+        'session_debug' => [
+            'lti_tool_id' => $_SESSION['lti_tool_id'] ?? 'not_set',
+            'target_tool' => $_SESSION['target_tool'] ?? 'not_set',
+            'nonce' => $_SESSION['nonce'] ?? 'not_set'
+        ],
+        'cookies_available' => $_COOKIE
     ], 'AUTH');
 
     try {
@@ -143,54 +179,69 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
 
         // Create JWT payload with LTI 1.3 claims
         $now = time();
+
+        // CRITICAL: Generate consistent context ID for Analysis tool course registration
+        $contextId = $_SESSION['context_id'] ?? generateDemoContextId();
+        $_SESSION['context_id'] = $contextId; // Store for NRPS consistency
+
         $payload = [
-            // Standard JWT claims
+            // Standard OIDC claims
             'iss' => PLATFORM_ISSUER,
-            'aud' => $params['client_id'],
             'sub' => $user['user_id'],
+            'aud' => $params['client_id'],
             'exp' => $now + (JWT_EXPIRY_HOURS * 3600), // Configurable expiry
             'iat' => $now,
-            'nonce' => $params['nonce'], // Use the nonce from Moodle's request
-
-            // Additional claims that Bookroll expects
-            'client_id' => $params['client_id'], // Bookroll looks for this as a direct claim
-            'originalIss' => PLATFORM_ISSUER, // Bookroll checks for originalIss first
-
-            // LTI specific claims
-            'https://purl.imsglobal.org/spec/lti/claim/message_type' => 'LtiResourceLinkRequest',
-            'https://purl.imsglobal.org/spec/lti/claim/version' => '1.3.0',
-            'https://purl.imsglobal.org/spec/lti/claim/deployment_id' =>
-                ($toolType === 'bookroll') ? BOOKROLL_DEPLOYMENT_ID : DEFAULT_DEPLOYMENT_ID,
-            'https://purl.imsglobal.org/spec/lti/claim/target_link_uri' => $params['redirect_uri'],
+            'nonce' => $params['nonce'], // Use the nonce from the tool's request
 
             // User information
             'name' => $user['name'],
             'given_name' => $user['given_name'],
             'family_name' => $user['family_name'],
+            'middle_name' => $user['middle_name'] ?? '',
+            'picture' => $user['picture'] ?? '',
             'email' => $user['email'],
-            'https://purl.imsglobal.org/spec/lti/claim/roles' => $user['roles'],
 
-            // Resource link
-            'https://purl.imsglobal.org/spec/lti/claim/resource_link' => [
-                'id' => 'resource-' . bin2hex(random_bytes(8)),
-                'title' => LTI_RESOURCE_TITLE,
-                'description' => LTI_RESOURCE_DESCRIPTION
-            ],
+            // LTI specific claims
+            'https://purl.imsglobal.org/spec/lti/claim/message_type' => 'LtiResourceLinkRequest',
+            'https://purl.imsglobal.org/spec/lti/claim/version' => '1.3.0',
+            'https://purl.imsglobal.org/spec/lti/claim/deployment_id' =>
+                ($toolType === 'bookroll') ? BOOKROLL_DEPLOYMENT_ID :
+                (($toolType === 'analysis') ? ANALYSIS_DEPLOYMENT_ID : DEFAULT_DEPLOYMENT_ID),
+            'https://purl.imsglobal.org/spec/lti/claim/target_link_uri' => $params['redirect_uri'],
 
-            // Context (course)
+            // Context claim (course/context information)
             'https://purl.imsglobal.org/spec/lti/claim/context' => [
-                'id' => 'course-' . bin2hex(random_bytes(8)),
+                'id' => $contextId,
                 'label' => LTI_CONTEXT_LABEL,
                 'title' => LTI_CONTEXT_TITLE,
                 'type' => ['http://purl.imsglobal.org/vocab/lis/v2/course#CourseOffering']
             ],
 
-            // Platform instance
-            'https://purl.imsglobal.org/spec/lti/claim/tool_platform' => [
-                'guid' => PLATFORM_DOMAIN,
-                'name' => PLATFORM_NAME,
-                'version' => PLATFORM_VERSION,
-                'product_family_code' => PLATFORM_PRODUCT_FAMILY
+            // Resource link claim
+            'https://purl.imsglobal.org/spec/lti/claim/resource_link' => [
+                'id' => 'resource-' . bin2hex(random_bytes(8)),
+                'title' => ($toolType === 'analysis') ? 'Analysis Tool Launch' : LTI_RESOURCE_TITLE,
+                'description' => ($toolType === 'analysis') ? 'Launch Analysis Tool for data analysis' : LTI_RESOURCE_DESCRIPTION
+            ],
+
+            // Roles claim
+            'https://purl.imsglobal.org/spec/lti/claim/roles' => $user['roles'],
+
+            // Names and Roles Provisioning Service (NRPS) - Required by Analysis tool
+            'https://purl.imsglobal.org/spec/lti-nrps/claim/namesroleservice' => [
+                'context_memberships_url' => PLATFORM_DOMAIN . '/nrps_memberships.php?context_id=' . $contextId,
+                'service_versions' => ['2.0']
+            ],
+
+            // Assignment and Grade Services (AGS) - Required by Analysis tool
+            'https://purl.imsglobal.org/spec/lti-ags/claim/endpoint' => [
+                'scope' => [
+                    'https://purl.imsglobal.org/spec/lti-ags/scope/lineitem',
+                    'https://purl.imsglobal.org/spec/lti-ags/scope/lineitem.readonly',
+                    'https://purl.imsglobal.org/spec/lti-ags/scope/result.readonly',
+                    'https://purl.imsglobal.org/spec/lti-ags/scope/score'
+                ],
+                'lineitems' => PLATFORM_DOMAIN . '/ags/lineitems'
             ],
 
             // Launch presentation
@@ -201,15 +252,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
                 'return_url' => PLATFORM_RETURN_URL
             ],
 
-            // Custom claims for Moodle LTI Advantage
-            'https://purl.imsglobal.org/spec/lti/claim/custom' => [
-                'id' => MOODLE_PUBLISHED_TOOL_ID
+            // Tool platform information
+            'https://purl.imsglobal.org/spec/lti/claim/tool_platform' => [
+                'guid' => PLATFORM_DOMAIN,
+                'name' => PLATFORM_NAME,
+                'version' => PLATFORM_VERSION,
+                'product_family_code' => PLATFORM_PRODUCT_FAMILY
             ],
 
-            // LTI message hint (if provided)
-            'https://purl.imsglobal.org/spec/lti/claim/lti1p1' => [
-                'user_id' => $user['user_id']
-            ]
+            // Custom claims (tool-specific)
+            'https://purl.imsglobal.org/spec/lti/claim/custom' => [],
+
+            // Add OAuth2 token endpoint for service authentication - CRITICAL for Analysis tool
+            'https://purl.imsglobal.org/spec/lti/claim/oauth2_token_endpoint' => PLATFORM_TOKEN_URL
         ];
 
         // Add LTI message hint if available
@@ -217,6 +272,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
             $payload['https://purl.imsglobal.org/spec/lti/claim/lti_message_hint'] = $_SESSION['lti_message_hint'];
         } elseif (isset($params['lti_message_hint'])) {
             $payload['https://purl.imsglobal.org/spec/lti/claim/lti_message_hint'] = $params['lti_message_hint'];
+        }
+
+        // Tool-specific customizations
+        if ($toolType === 'bookroll') {
+            // Bookroll expects these additional claims
+            $payload['client_id'] = $params['client_id']; // Bookroll looks for this as a direct claim
+            $payload['originalIss'] = PLATFORM_ISSUER; // Bookroll checks for originalIss first
+
+        } elseif ($toolType === 'analysis') {
+            // Analysis tool specific customizations
+            $payload['https://purl.imsglobal.org/spec/lti/claim/custom'] = array_merge(
+                $payload['https://purl.imsglobal.org/spec/lti/claim/custom'],
+                [
+                    'analysis_tool_id' => '2',
+                    'platform_type' => 'php_lti_platform',
+                    'integration_version' => '1.0'
+                ]
+            );
         }
 
         // Create the JWT token
@@ -234,24 +307,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET' || $_SERVER['REQUEST_METHOD'] === 'POST
         ], 'AUTH');
 
         // Log the actual JWT token for debugging
-        logMessage("ACTUAL JWT TOKEN SENT TO BOOKROLL", [
+        logMessage("ACTUAL JWT TOKEN SENT TO " . strtoupper($toolType), [
             'jwt_token' => $idToken
-        ], 'BOOKROLL_DEBUG');
+        ], strtoupper($toolType) . '_DEBUG');
 
-        // Log the exact claims that Bookroll will use for database lookup
-        logMessage("BOOKROLL DATABASE LOOKUP CLAIMS", [
+        // Log the exact claims that the tool will use for database lookup
+        logMessage(strtoupper($toolType) . " DATABASE LOOKUP CLAIMS", [
             'originalIss' => $payload['originalIss'] ?? 'NOT_SET',
             'iss' => $payload['iss'],
             'client_id' => $payload['client_id'] ?? 'NOT_SET',
             'deployment_id' => $payload['https://purl.imsglobal.org/spec/lti/claim/deployment_id'] ?? 'NOT_SET',
             'tool_type' => $toolType,
             'full_payload_keys' => array_keys($payload)
-        ], 'BOOKROLL_DEBUG');
+        ], strtoupper($toolType) . '_DEBUG');
 
-        // Also log what's being searched in database
+        // Log LTI service endpoints for Analysis tool
+        if ($toolType === 'analysis') {
+            logMessage("ANALYSIS LTI SERVICES CLAIMS", [
+                'oauth2_token_endpoint' => $payload['https://purl.imsglobal.org/spec/lti/claim/oauth2_token_endpoint'] ?? 'NOT_SET',
+                'nrps_url' => $payload['https://purl.imsglobal.org/spec/lti-nrps/claim/namesroleservice']['context_memberships_url'] ?? 'NOT_SET',
+                'ags_lineitems' => $payload['https://purl.imsglobal.org/spec/lti-ags/claim/endpoint']['lineitems'] ?? 'NOT_SET',
+                'deep_linking_return' => $payload['https://purl.imsglobal.org/spec/lti-dl/claim/deep_linking_settings']['deep_link_return_url'] ?? 'NOT_SET'
+            ], 'ANALYSIS_SERVICES');
+        }
+
+        // Also log what's being searched in database (tool-specific)
+        $toolPrefix = $toolType === 'bookroll' ? 'br_' : ($toolType === 'analysis' ? 'analysis_' : '');
         logMessage("DATABASE LOOKUP QUERY EQUIVALENT", [
-            'query' => "SELECT * FROM br_lti13_iss_configuration WHERE iss = '" . $payload['originalIss'] . "' AND client_id = '" . $payload['client_id'] . "' AND deployment_id = '" . $payload['https://purl.imsglobal.org/spec/lti/claim/deployment_id'] . "'"
-        ], 'BOOKROLL_DEBUG');
+            'tool_type' => $toolType,
+            'query' => "SELECT * FROM {$toolPrefix}lti13_iss_configuration WHERE iss = '" . $payload['originalIss'] . "' AND client_id = '" . $payload['client_id'] . "' AND deployment_id = '" . $payload['https://purl.imsglobal.org/spec/lti/claim/deployment_id'] . "'"
+        ], strtoupper($toolType) . '_DEBUG');
 
         // Respond with form post to Moodle
         ?>
